@@ -1,10 +1,11 @@
-package traefik_ultimate_bad_bot_blocker
+package traefik_simplified_bad_bot_blocker
 
 import (
 	"bufio"
 	"context"
 	"fmt"
 	"io"
+	"sync"
 
 	"net/http"
 	"net/netip"
@@ -12,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	log "github.com/discoverygarden/traefik-ultimate-bad-bot-blocker/utils"
+	log "github.com/Dakraid/traefik-simplified-bad-bot-blocker/utils"
 )
 
 type Config struct {
@@ -32,50 +33,57 @@ func CreateConfig() *Config {
 type BotBlocker struct {
 	next               http.Handler
 	name               string
-	prefixBlocklist    []netip.Prefix
-	userAgentBlockList []string
+	prefixBlocklist    map[netip.Prefix]bool
+	userAgentBlockList map[string]bool
 	lastUpdated        time.Time
+	mu                 sync.RWMutex
 	Config
 }
 
-func (b *BotBlocker) update() error {
-	startTime := time.Now()
-	err := b.updateIps()
-	if err != nil {
-		return fmt.Errorf("failed to update CIDR blocklists: %w", err)
-	}
-	err = b.updateUserAgents()
-	if err != nil {
-		return fmt.Errorf("failed to update user agent blocklists: %w", err)
-	}
-
-	b.lastUpdated = time.Now()
-	duration := time.Since(startTime)
-	log.Info("Updated block lists. Blocked CIDRs: ", len(b.prefixBlocklist), " Duration: ", duration)
-	return nil
-}
-
 func (b *BotBlocker) updateIps() error {
-	prefixBlockList := make([]netip.Prefix, 0)
+	prefixBlockList := make(map[netip.Prefix]bool, len(b.prefixBlocklist))
 
 	log.Info("Updating CIDR blocklist")
-	for _, url := range b.IpBlocklistUrls {
-		resp, err := http.Get(url)
-		if err != nil {
-			return fmt.Errorf("failed fetch CIDR list: %w", err)
-		}
-		if resp.StatusCode > 299 {
-			return fmt.Errorf("failed to fetch CIDR list: received a %v from %v", resp.Status, url)
-		}
 
-		prefixes, err := readPrefixes(resp.Body)
-		if err != nil {
-			return fmt.Errorf("failed to update CIDRs: %e", err)
-		}
-		prefixBlockList = append(prefixBlockList, prefixes...)
+	type prefixResult struct {
+		prefixes []netip.Prefix
+		err      error
 	}
 
+	results := make(chan prefixResult, len(b.IpBlocklistUrls))
+
+	for _, url := range b.IpBlocklistUrls {
+		go func(url string) {
+			resp, err := http.Get(url)
+			if err != nil {
+				results <- prefixResult{err: fmt.Errorf("failed fetch CIDR list: %w", err)}
+				return
+			}
+			defer resp.Body.Close()
+
+			if resp.StatusCode > 299 {
+				results <- prefixResult{err: fmt.Errorf("failed to fetch CIDR list: received a %v from %v", resp.Status, url)}
+				return
+			}
+
+			prefixes, err := readPrefixes(resp.Body)
+			results <- prefixResult{prefixes: prefixes, err: err}
+		}(url)
+	}
+
+	for i := 0; i < len(b.IpBlocklistUrls); i++ {
+		result := <-results
+		if result.err != nil {
+			return result.err
+		}
+		for _, prefix := range result.prefixes {
+			prefixBlockList[prefix] = true
+		}
+	}
+
+	b.mu.Lock()
 	b.prefixBlocklist = prefixBlockList
+	b.mu.Unlock()
 
 	return nil
 }
@@ -129,7 +137,7 @@ func readUserAgents(userAgentReader io.ReadCloser) ([]string, error) {
 }
 
 func (b *BotBlocker) updateUserAgents() error {
-	userAgentBlockList := make([]string, 0)
+	userAgentBlockList := make(map[string]bool)
 
 	log.Info("Updating user agent blocklist")
 	for _, url := range b.UserAgentBlocklistUrls {
@@ -145,11 +153,48 @@ func (b *BotBlocker) updateUserAgents() error {
 		if err != nil {
 			return err
 		}
-		userAgentBlockList = append(userAgentBlockList, agents...)
+		for _, agent := range agents {
+			userAgentBlockList[agent] = true
+		}
 	}
 
 	b.userAgentBlockList = userAgentBlockList
 
+	return nil
+}
+
+func (b *BotBlocker) update() error {
+	startTime := time.Now()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	var ipErr, uaErr error
+
+	go func() {
+		defer wg.Done()
+		ipErr = b.updateIps()
+	}()
+
+	go func() {
+		defer wg.Done()
+		uaErr = b.updateUserAgents()
+	}()
+
+	wg.Wait()
+
+	if ipErr != nil {
+		return fmt.Errorf("failed to update CIDR blocklists: %w", ipErr)
+	}
+	if uaErr != nil {
+		return fmt.Errorf("failed to update user agent blocklists: %w", uaErr)
+	}
+
+	b.mu.Lock()
+	b.lastUpdated = time.Now()
+	b.mu.Unlock()
+
+	duration := time.Since(startTime)
+	log.Info("Updated block lists. Blocked CIDRs: ", len(b.prefixBlocklist), " Duration: ", duration)
 	return nil
 }
 
@@ -173,42 +218,65 @@ func New(ctx context.Context, next http.Handler, config *Config, name string) (h
 }
 
 func (b *BotBlocker) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
-	if time.Since(b.lastUpdated) > time.Hour {
-		err := b.update()
-		if err != nil {
-			log.Errorf("failed to update blocklist: %v", err)
-		}
+	b.mu.RLock()
+	timeSinceUpdate := time.Since(b.lastUpdated)
+	b.mu.RUnlock()
+
+	if timeSinceUpdate > time.Hour {
+		go func() {
+			err := b.update()
+			if err != nil {
+				log.Errorf("Failed to update blocklist: %v", err)
+			}
+		}()
 	}
+
 	startTime := time.Now()
 	log.Debugf("Checking request: CIDR: \"%v\" user agent: \"%s\"", req.RemoteAddr, req.UserAgent())
-	timer := func() {
+	defer func() {
 		log.Debugf("Checked request in %v", time.Since(startTime))
-	}
-	defer timer()
+	}()
 
 	remoteAddrPort, err := netip.ParseAddrPort(req.RemoteAddr)
 	if err != nil {
-		http.Error(rw, "internal error", http.StatusInternalServerError)
-		return
-	}
-	if b.shouldBlockIp(remoteAddrPort.Addr()) {
-		log.Infof("blocked request with from IP %v", remoteAddrPort.Addr())
-		http.Error(rw, "blocked", http.StatusForbidden)
+		http.Error(rw, "Internal Error", http.StatusInternalServerError)
 		return
 	}
 
-	agent := strings.ToLower(req.UserAgent())
-	if b.shouldBlockAgent(agent) {
-		log.Infof("blocked request with user agent %v because it contained %v", agent, agent)
-		http.Error(rw, "blocked", http.StatusForbidden)
-		return
+	b.mu.RLock()
+	hasIPBlocklist := len(b.prefixBlocklist) != 0
+	hasUABlocklist := len(b.userAgentBlockList) != 0
+	b.mu.RUnlock()
+
+	if hasIPBlocklist {
+		if b.shouldBlockIp(remoteAddrPort.Addr()) {
+			log.Infof("Blocked request with from IP %v", remoteAddrPort.Addr())
+			http.Error(rw, "Blocked", http.StatusForbidden)
+			return
+		}
+	}
+
+	if hasUABlocklist {
+		agent := strings.ToLower(req.UserAgent())
+		if b.shouldBlockAgent(agent) {
+			log.Infof("Blocked request with user agent %v", agent)
+			http.Error(rw, "Blocked", http.StatusForbidden)
+			return
+		}
 	}
 
 	b.next.ServeHTTP(rw, req)
 }
 
 func (b *BotBlocker) shouldBlockIp(addr netip.Addr) bool {
-	for _, badPrefix := range b.prefixBlocklist {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if _, blocked := b.prefixBlocklist[netip.PrefixFrom(addr, addr.BitLen())]; blocked {
+		return true
+	}
+
+	for badPrefix := range b.prefixBlocklist {
 		if badPrefix.Contains(addr) {
 			return true
 		}
@@ -218,8 +286,16 @@ func (b *BotBlocker) shouldBlockIp(addr netip.Addr) bool {
 
 func (b *BotBlocker) shouldBlockAgent(userAgent string) bool {
 	userAgent = strings.ToLower(strings.TrimSpace(userAgent))
-	for _, badAgent := range b.userAgentBlockList {
-		if strings.Contains(userAgent, badAgent) {
+
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+
+	if _, blocked := b.userAgentBlockList[userAgent]; blocked {
+		return true
+	}
+
+	for badAgent := range b.userAgentBlockList {
+		if len(badAgent) <= len(userAgent) && strings.Contains(userAgent, badAgent) {
 			return true
 		}
 	}

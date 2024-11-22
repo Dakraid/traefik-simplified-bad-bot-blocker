@@ -7,12 +7,12 @@ services:
       - "--providers.docker.exposedbydefault=false"
       - "--entryPoints.web.address=:80"
       - "--accesslog=true"
-      - "--experimental.localPlugins.botblocker.moduleName=github.com/discoverygarden/traefik-ultimate-bad-bot-blocker"
+      - "--experimental.localPlugins.botblocker.moduleName=github.com/Dakraid/traefik-simplified-bad-bot-blocker"
     ports:
       - "8080:80"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock:ro"
-      - "./:/plugins-local/src/github.com/discoverygarden/traefik-ultimate-bad-bot-blocker"
+      - "./:/plugins-local/src/github.com/Dakraid/traefik-simplified-bad-bot-blocker"
     networks:
       test:
   whoami:

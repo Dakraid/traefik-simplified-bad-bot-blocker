@@ -1,4 +1,4 @@
-package traefik_ultimate_bad_bot_blocker
+package traefik_simplified_bad_bot_blocker
 
 import (
 	"net/netip"
@@ -75,15 +75,15 @@ func TestReadUserAgents(t *testing.T) {
 
 func TestShouldBlockIp(t *testing.T) {
 	botBlocker := BotBlocker{
-		prefixBlocklist: []netip.Prefix{
+		prefixBlocklist: map[netip.Prefix]bool{
 			netip.PrefixFrom(
 				netip.AddrFrom4([4]byte{10, 10, 10, 2}),
 				32,
-			),
+			): true,
 			netip.PrefixFrom(
 				netip.AddrFrom4([4]byte{192, 168, 1, 1}),
 				32,
-			),
+			): true,
 		},
 	}
 	badIp := netip.AddrFrom4([4]byte{10, 10, 10, 2})
@@ -96,15 +96,15 @@ func TestShouldBlockIp(t *testing.T) {
 
 func TestShouldAllowIp(t *testing.T) {
 	botBlocker := BotBlocker{
-		prefixBlocklist: []netip.Prefix{
+		prefixBlocklist: map[netip.Prefix]bool{
 			netip.PrefixFrom(
 				netip.AddrFrom4([4]byte{10, 10, 10, 2}),
 				32,
-			),
+			): true,
 			netip.PrefixFrom(
 				netip.AddrFrom4([4]byte{192, 168, 1, 1}),
 				32,
-			),
+			): true,
 		},
 	}
 	ip := netip.AddrFrom4([4]byte{10, 10, 10, 2})
@@ -117,11 +117,11 @@ func TestShouldAllowIp(t *testing.T) {
 
 func TestShouldBlockIpCidr(t *testing.T) {
 	botBlocker := BotBlocker{
-		prefixBlocklist: []netip.Prefix{
+		prefixBlocklist: map[netip.Prefix]bool{
 			netip.PrefixFrom(
 				netip.AddrFrom4([4]byte{10, 10, 10, 0}),
 				24,
-			),
+			): true,
 		},
 	}
 	badIp := netip.AddrFrom4([4]byte{10, 10, 10, 2})
@@ -134,11 +134,11 @@ func TestShouldBlockIpCidr(t *testing.T) {
 
 func TestShouldAllowIpCidr(t *testing.T) {
 	botBlocker := BotBlocker{
-		prefixBlocklist: []netip.Prefix{
+		prefixBlocklist: map[netip.Prefix]bool{
 			netip.PrefixFrom(
 				netip.AddrFrom4([4]byte{10, 10, 10, 0}),
 				24,
-			),
+			): true,
 		},
 	}
 	goodIp := netip.AddrFrom4([4]byte{10, 10, 20, 2})
@@ -151,8 +151,8 @@ func TestShouldAllowIpCidr(t *testing.T) {
 
 func TestShouldBlockUserAgent(t *testing.T) {
 	botBlocker := BotBlocker{
-		userAgentBlockList: []string{
-			"nintendobrowser",
+		userAgentBlockList: map[string]bool{
+			"nintendobrowser": true,
 		},
 	}
 	badUserAgent := "Mozilla/5.0 (Nintendo WiiU) AppleWebKit/536.30 (KHTML, like Gecko) NX/3.0.4.2.12 NintendoBrowser/4.3.1.11264.US"
@@ -163,10 +163,10 @@ func TestShouldBlockUserAgent(t *testing.T) {
 	}
 }
 
-func TestShouldAlowUserAgent(t *testing.T) {
+func TestShouldAllowUserAgent(t *testing.T) {
 	botBlocker := BotBlocker{
-		userAgentBlockList: []string{
-			"nintendobrowser",
+		userAgentBlockList: map[string]bool{
+			"nintendobrowser": true,
 		},
 	}
 	userAgent := "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"

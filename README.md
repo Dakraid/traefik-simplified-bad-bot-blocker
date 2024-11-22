@@ -2,6 +2,8 @@
 
 Traefik Plugin based on the [Apache Ultimate Bad Bot Blocker](https://github.com/mitchellkrogza/apache-ultimate-bad-bot-blocker/tree/master). It blocks IP addresses, CIDR IP ranges and User-Agents from subscribed blocklists.
 
+This is an updated version that focuses on performance improvements.
+
 ## Configuration
 
 Middleware example:

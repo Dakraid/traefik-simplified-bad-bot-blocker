@@ -1,7 +1,7 @@
 displayName: Trafik Ultimate Bad Bot Blocker
 type: middleware
 
-import: github.com/discoverygarden/traefik-ultimate-bad-bot-blocker
+import: github.com/Dakraid/traefik-simplified-bad-bot-blocker
 
 summary: 'IP and user agent blocker'
 
